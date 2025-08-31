@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Email Risk Scorer — Prototype</title>
+  <style>
+    :root{
+      --bg:#0b0c10; --card:#121318; --muted:#aab0c0; --text:#e8ecf1;
+      --ok:#16a34a; --warn:#eab308; --bad:#ef4444; --accent:#3b82f6;
+      --chip:#1b1e27;
+    }
+    *{box-sizing:border-box}
+    body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Inter,Arial,sans-serif;background:var(--bg);color:var(--text);}
+    header{padding:20px 16px;border-bottom:1px solid #1c2030;background:#0c0e14;position:sticky;top:0;z-index:5}
+    header h1{margin:0;font-size:18px;font-weight:600}
+    main{max-width:1100px;margin:0 auto;padding:18px;display:grid;gap:18px;grid-template-columns:1fr; }
+    @media(min-width:1000px){ main{grid-template-columns:1.2fr .8fr;} }
+
+    .card{background:var(--card);border:1px solid #1c2030;border-radius:12px;padding:16px}
+    .card h2{margin:0 0 8px 0;font-size:16px}
+    label{font-size:13px;color:var(--muted);display:block;margin-bottom:6px}
+    textarea{width:100%;min-height:320px;background:#0e1118;color:var(--text);border:1px solid #22283a;border-radius:10px;padding:12px;resize:vertical;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+    .row{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}
+    button{background:var(--accent);color:white;border:0;border-radius:10px;padding:10px 14px;font-weight:600;cursor:pointer}
+    button.secondary{background:#22283a;color:#e6e9f3}
+    button.ghost{background:transparent;border:1px solid #2a3043;color:#cdd3e4}
+    .muted{color:var(--muted);font-size:12px}
+    .scoreWrap{display:flex;align-items:center;gap:14px;margin-top:6px}
+    .scoreBadge{
+      width:84px;height:84px;border-radius:999px;display:flex;align-items:center;justify-content:center;
+      font-size:24px;font-weight:800;border:6px solid #1f2434;background:#0e1118;
+    }
+    .scoreBadge.ok{border-color:var(--ok)}
+    .scoreBadge.warn{border-color:var(--warn)}
+    .scoreBadge.bad{border-color:var(--bad)}
+    .pill{display:inline-flex;align-items:center;gap:8px;background:var(--chip);border:1px solid #23283a;color:#cfd6ea;border-radius:999px;padding:6px 10px;font-size:12px}
+    ul.clean{list-style:none;margin:8px 0 0 0;padding:0}
+    ul.clean li{padding:8px 0;border-bottom:1px dashed #1f2536}
+    .good{color:var(--ok)}
+    .meh{color:var(--warn)}
+    .badt{color:var(--bad)}
+    .kv{display:grid;grid-template-columns:140px 1fr;gap:6px 10px;margin-top:10px}
+    .kv div:nth-child(odd){color:var(--muted)}
+    .chips{display:flex;flex-wrap:wrap;gap:8px}
+    .divider{height:1px;background:#1d2232;margin:12px 0}
+    .small{font-size:12px}
+    .footer{padding:18px;color:#9aa3b7;text-align:center}
+    .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Email Risk Scorer — MVP</h1>
+    <div class="muted">Paste a recruiter email or outreach message, then click Analyze.</div>
+  </header>
+
+  <main>
+    <!-- Input -->
+    <section class="card">
+      <h2>Paste Email</h2>
+      <label for="emailText">We don’t send anything anywhere — all analysis happens in your browser.</label>
+      <textarea id="emailText" placeholder="Paste the full email text including signature, emails, links, and phone numbers..."></textarea>
+      <div class="row">
+        <button id="analyzeBtn">Analyze</button>
+        <button class="secondary" id="sample1">Load sample (legit-ish)</button>
+        <button class="secondary" id="sample2">Load sample (spammy)</button>
+        <button class="ghost" id="clearBtn">Clear</button>
+      </div>
+      <div class="muted" style="margin-top:8px">Tip: You can include the From line like: <span class="mono">From: Raina &lt;rpintor@lucasjamestalent.com&gt;</span></div>
+    </section>
+
+    <!-- Output -->
+    <section class="card" id="resultsCard">
+      <h2>Results</h2>
+      <div class="scoreWrap">
+        <div id="scoreBadge" class="scoreBadge">–</div>
+        <div>
+          <div id="scoreLabel" class="pill">No analysis yet</div>
+          <div class="kv">
+            <div>Detected sender(s)</div><div id="senders" class="mono">–</div>
+            <div>Domains</div><div id="domains" class="chips">–</div>
+            <div>Company names</div><div id="companies" class="chips">–</div>
+            <div>URLs</div><div id="urls" class="chips">–</div>
+            <div>Phones</div><div id="phones" class="chips">–</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="divider"></div>
+
+      <h3 class="small">Evidence & Rules</h3>
+      <ul class="clean" id="evidenceList">
+        <li class="muted">Run an analysis to see a breakdown of passes/fails and their weights.</li>
+      </ul>
+
+      <div class="row" style="margin-top:10px">
+        <button id="copyJson" class="ghost">Copy JSON report</button>
+        <button id="downloadJson" class="ghost">Download JSON</button>
+      </div>
+    </section>
+  </main>
+
+  <div class="footer small">Prototype v1 — heuristic only (no guarantees). Always verify through official channels.</div>
+
+  <script>
+    // ------- Utility extractors -------
+    const emailRegex = /[a-z0-9._%+-]+@([a-z0-9.-]+\.[a-z]{2,})/gi;
+    const urlRegex = /\b((?:https?:\/\/)?(?:[a-z0-9-]+\.)+[a-z]{2,}(?:\/[^\s]*)?)/ig;
+    const phoneRegex = /(?:(?:\+?1[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4})/g;
+    const shorteners = ['bit.ly','tinyurl.com','goo.gl','t.co','ow.ly','buff.ly','rebrand.ly','is.gd','s.id','rb.gy'];
+    const urgencyWords = ['immediate','immediately','urgent','asap','right away','start asap','fast track'];
+    const genericGreetings = ['hi','hello','dear','greetings'];
+    const techBuzz = [
+      'scada','oms','adms','ems','nerc','cip','gis','ami','lte','iot',
+      'asp.net','c#','vb.net','.net','entity framework','kendo','jquery','restful','api',
+      'oracle','sql server','pl/sql','hana','linux','windows','middleware','microservices'
+    ];
+
+    function unique(arr){return Array.from(new Set(arr)).filter(Boolean);}
+    function getDomains(emails){return unique(emails.map(e=> (e.split('@')[1]||'').toLowerCase()));}
+    function extractCompanyGuesses(text){
+      // crude signature/company extraction: look for lines ending with LLC/Inc/Co/Company/Technologies/Solutions/Partners
+      const lines = text.split(/\r?\n/).map(l=>l.trim()).filter(Boolean);
+      const comp = [];
+      const pat = /\b([A-Z][A-Za-z.&\-\s]{1,40}?(?: (?:LLC|Inc\.?|Incorporated|Corp\.?|Corporation|Co\.|Company|Technologies|Technology|Solutions|Partners)))\b/;
+      for(const l of lines){
+        const m = l.match(pat);
+        if(m) comp.push(m[1].replace(/\s+/g,' ').trim());
+      }
+      // also catch “@Panzer Solutions” style without suffix
+      const pat2 = /\b([A-Z][A-Za-z.&\-\s]{1,40}?(?:Solutions|Partners|Technologies|Talent|Recruiting))\b/;
+      for(const l of lines){
+        const m = l.match(pat2);
+        if(m) comp.push(m[1].replace(/\s+/g,' ').trim());
+      }
+      return unique(comp);
+    }
+    function containsGenericGreetingTop(text){
+      const firstLine = (text.split(/\r?\n/).find(l=>l.trim().length>0)||'').toLowerCase();
+      return genericGreetings.some(g=> firstLine.startsWith(g+' ') || firstLine===g);
+    }
+    function countBuzz(text){
+      const t = text.toLowerCase();
+      let c=0;
+      techBuzz.forEach(k=>{ if(t.includes(k)) c++; });
+      return c;
+    }
+    function includesUrgency(text){
+      const t=text.toLowerCase();
+      return urgencyWords.some(w=> t.includes(w));
+    }
+    function hasAllInclusive(text){
+      return /\ball\s*inclusive\b/i.test(text);
+    }
+    function looksKeywordStuffed(text){
+      // keyword stuffing heuristic: many comma/semicolon separated items in a single line
+      const lines=text.split(/\r?\n/);
+      let heavy=false;
+      for(const l of lines){
+        const commas=(l.match(/,/g)||[]).length;
+        const semis=(l.match(/;/g)||[]).length;
+        if((commas+semis)>=8) {heavy=true; break;}
+      }
+      return heavy || countBuzz(text)>=10;
+    }
+    function urlList(text){
+      const raw = unique((text.match(urlRegex)||[]));
+      // normalize: add protocol if missing for display
+      return raw.map(u=>{
+        if(!/^https?:\/\//i.test(u)) return 'http://' + u;
+        return u;
+      });
+    }
+    function detectShorteners(urls){
+      return urls.filter(u=>{
+        try{ const h=new URL(u); return shorteners.includes(h.hostname.toLowerCase()); }
+        catch{ return false; }
+      });
+    }
+    function extractEmails(text){
+      return unique((text.match(emailRegex)||[])).map(e=>e.toLowerCase());
+    }
+    function extractPhones(text){
+      return unique((text.match(phoneRegex)||[]));
+    }
+    function domainMatchesCompany(domains, companies){
+      // very forgiving: check if company keyword appears in domain
+      const compKeys = companies.map(c=> c.toLowerCase().replace(/(llc|inc|corporation|corp|company|technologies|technology|solutions|partners|\.)/g,'').trim())
+        .map(c=> c.replace(/[^a-z0-9 ]/g,'').split(' ').filter(w=>w.length>2)[0]).filter(Boolean);
+      const dKeys = domains.map(d=> d.split('.').slice(0,-1).join('.')); // strip TLD
+      return compKeys.some(k=> dKeys.some(d=> d.includes(k)));
+    }
+    function looksWeirdDomain(dom){
+      // flag uncommon/vanity TLDs for recruiting (not a hard fail)
+      const tld = dom.split('.').pop();
+      const common = ['com','co','net','io','ai','org','us','ca','uk','de','app'];
+      return !common.includes(tld);
+    }
+    function cleanChips(arr){
+      if(!arr || arr.length===0) return '–';
+      return arr.map(x=>`<span class="pill">${escapeHtml(x)}</span>`).join(' ');
+    }
+    function escapeHtml(s){return s.replace(/[&<>"']/g,m=>({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;" }[m]));}
+
+    // ------- Scoring -------
+    function scoreEmail(text){
+      const emails = extractEmails(text);
+      const domains = getDomains(emails);
+      const urls = urlList(text);
+      const phones = extractPhones(text);
+      const companies = extractCompanyGuesses(text);
+
+      // Rule results (each item: {label, weight, passed, details})
+      const rules = [];
+
+      // 1) Multiple different sender emails in body/signature
+      rules.push({
+        label:'Multiple sender emails present',
+        weight:8,
+        passed: emails.length <= 1,
+        details:`Found ${emails.length} email(s): ${emails.join(', ')}`
+      });
+
+      // 2) Company name ↔ domain alignment
+      const match = companies.length && domains.length ? domainMatchesCompany(domains, companies) : false;
+      rules.push({
+        label:'Company name matches sender domain',
+        weight:10,
+        passed: match,
+        positive:true,
+        details: companies.length? `Companies: ${companies.join(' | ')} vs Domains: ${domains.join(' | ')}` : 'No company name detected'
+      });
+
+      // 3) Missing employer/client name (only vague descriptors)
+      const vague = /\b(leading|fast[-\s]?growing|stealth|confidential|top[-\s]?tier|prestigious)\b/i.test(text) &&
+                    !/\b(client|company|employer|hiring\s+company)\b.*\b[A-Z]/.test(text);
+      rules.push({
+        label:'No clear employer/client named',
+        weight:10,
+        passed: !vague,
+        details: vague ? 'Vague descriptors detected without a concrete company' : 'Some specifics present or not detected'
+      });
+
+      // 4) Generic greeting at top
+      rules.push({
+        label:'Generic greeting',
+        weight:4,
+        passed: !containsGenericGreetingTop(text),
+        details: 'Flags “Hi/Hello/Dear …” as the very first non-empty line'
+      });
+
+      // 5) Urgency language
+      rules.push({
+        label:'Urgency language (Immediate/ASAP/etc.)',
+        weight:5,
+        passed: !includesUrgency(text),
+        details:'Common urgency words used in bulk recruiting'
+      });
+
+      // 6) “All inclusive” rate phrasing
+      rules.push({
+        label:'Uses “all inclusive” rate phrasing',
+        weight:6,
+        passed: !hasAllInclusive(text),
+        details:'Often seen in low-quality body-shop emails'
+      });
+
+      // 7) Keyword/buzzword stuffing
+      const stuffed = looksKeywordStuffed(text);
+      rules.push({
+        label:'Keyword/buzzword stuffing',
+        weight:10,
+        passed: !stuffed,
+        details:`Detected tech buzz count: ${countBuzz(text)}`
+      });
+
+      // 8) URL shorteners present
+      const shorts = detectShorteners(urls);
+      rules.push({
+        label:'URL shortener links present',
+        weight:5,
+        passed: shorts.length===0,
+        details: shorts.length? `Shorteners: ${shorts.join(', ')}` : 'None found'
+      });
+
+      // 9) Nonstandard/vanity TLD for sender domain
+      const weird = domains.some(looksWeirdDomain);
+      rules.push({
+        label:'Uncommon sender domain TLD',
+        weight:4,
+        passed: !weird || domains.length===0,
+        details: domains.length? `Domains: ${domains.join(', ')}` : 'No domains found'
+      });
+
+      // 10) Presence of professional profile/website (positive)
+      const hasLinked = urls.some(u=>{ try{const h=new URL(u); return h.hostname.includes('linkedin.com');}catch{return false;}});
+      const hasSite = urls.some(u=>{ try{const h=new URL(u); return !shorteners.includes(h.hostname) && !h.hostname.includes('linkedin.com');}catch{return false;}});
+      rules.push({
+        label:'Includes LinkedIn or company website',
+        weight:6,
+        passed: hasLinked || hasSite,
+        positive:true,
+        details: (hasLinked?'LinkedIn ':'') + (hasSite?'Website present':'')
+      });
+
+      // 11) Multiple conflicting company names in body/signature
+      const conflict = companies.length>=2 && (new Set(companies.map(c=>c.toLowerCase()))).size>=2;
+      rules.push({
+        label:'Conflicting company names',
+        weight:8,
+        passed: !conflict,
+        details: conflict? `Companies: ${companies.join(' | ')}` : 'None or single company'
+      });
+
+      // 12) Phone sanity (very light check)
+      const phoneWeird = phones.some(p => (p.replace(/\D/g,'').length<10 || p.replace(/\D/g,'').length>11));
+      rules.push({
+        label:'Phone format sanity',
+        weight:3,
+        passed: !phoneWeird || phones.length===0,
+        details: phones.length? `Phones: ${phones.join(', ')}` : 'No phone found'
+      });
+
+      // Compute score
+      let score = 100;
+      for(const r of rules){
+        if(r.positive){
+          if(r.passed) score += r.weight;
+        } else {
+          if(!r.passed) score -= r.weight;
+        }
+      }
+      // clamp 0..100+
+      score = Math.max(0, Math.min(100, score));
+
+      const label = score>=75 ? 'Likely Legit' : score>=50 ? 'Caution' : 'High Risk';
+      const badgeClass = score>=75 ? 'ok' : score>=50 ? 'warn' : 'bad';
+
+      return {
+        score, label, badgeClass,
+        emails, domains, urls, phones, companies,
+        rules
+      };
+    }
+
+    // ------- UI bindings -------
+    const el = (id)=>document.getElementById(id);
+    const emailText = el('emailText');
+    const scoreBadge = el('scoreBadge');
+    const scoreLabel = el('scoreLabel');
+    const evidenceList = el('evidenceList');
+    const senders = el('senders');
+    const domainsEl = el('domains');
+    const companiesEl = el('companies');
+    const urlsEl = el('urls');
+    const phonesEl = el('phones');
+
+    function renderReport(rep){
+      scoreBadge.textContent = Math.round(rep.score);
+      scoreBadge.className = 'scoreBadge '+rep.badgeClass;
+      scoreLabel.textContent = rep.label;
+      scoreLabel.className = 'pill ' + (rep.badgeClass==='ok'?'good': rep.badgeClass==='warn'?'meh':'badt');
+
+      senders.textContent = rep.emails.length? rep.emails.join(', ') : '–';
+      domainsEl.innerHTML = rep.domains.length? cleanChips(rep.domains) : '–';
+      companiesEl.innerHTML = rep.companies.length? cleanChips(rep.companies) : '–';
+      urlsEl.innerHTML = rep.urls.length? cleanChips(rep.urls) : '–';
+      phonesEl.innerHTML = rep.phones.length? cleanChips(rep.phones) : '–';
+
+      evidenceList.innerHTML = '';
+      rep.rules.forEach(r=>{
+        const li = document.createElement('li');
+        const state = r.passed ? (r.positive? 'good':'good') : (r.positive? 'meh':'badt');
+        const icon = r.passed ? '✓' : '✕';
+        li.innerHTML = `<div><span class="${state}">${icon}</span> <strong>${escapeHtml(r.label)}</strong> · weight ${r.weight}</div>
+                        <div class="muted small">${escapeHtml(r.details||'')}</div>`;
+        evidenceList.appendChild(li);
+      });
+
+      // stash for export
+      window.__lastReport = {
+        score: Math.round(rep.score),
+        label: rep.label,
+        emails: rep.emails,
+        domains: rep.domains,
+        urls: rep.urls,
+        phones: rep.phones,
+        companies: rep.companies,
+        evidence: rep.rules.map(r=>({
+          rule: r.label, passed: r.passed, weight: r.weight, positive: !!r.positive, details: r.details
+        })),
+        analyzedAt: new Date().toISOString()
+      };
+    }
+
+    el('analyzeBtn').addEventListener('click', ()=>{
+      const t = emailText.value.trim();
+      if(!t){ alert('Paste an email first.'); return; }
+      const rep = scoreEmail(t);
+      renderReport(rep);
+    });
+
+    el('clearBtn').addEventListener('click', ()=>{
+      emailText.value='';
+      scoreBadge.textContent='–'; scoreBadge.className='scoreBadge';
+      scoreLabel.textContent='No analysis yet'; scoreLabel.className='pill';
+      evidenceList.innerHTML='<li class="muted">Run an analysis to see a breakdown of passes/fails and their weights.</li>';
+      senders.textContent=domainsEl.innerHTML=companiesEl.innerHTML=urlsEl.innerHTML=phonesEl.innerHTML='–';
+      window.__lastReport = null;
+    });
+
+    el('copyJson').addEventListener('click', async ()=>{
+      const data = window.__lastReport || {note:'Run an analysis first'};
+      try{
+        await navigator.clipboard.writeText(JSON.stringify(data, null, 2));
+        alert('JSON copied to clipboard.');
+      }catch{
+        alert('Could not copy. (Your browser may block clipboard access.)');
+      }
+    });
+
+    el('downloadJson').addEventListener('click', ()=>{
+      const data = window.__lastReport || {note:'Run an analysis first'};
+      const blob = new Blob([JSON.stringify(data,null,2)], {type:'application/json'});
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `email_score_${Date.now()}.json`;
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(a.href);
+    });
+
+    // Samples
+    el('sample1').addEventListener('click', ()=>{
+      emailText.value =
+`From: Raina Pintor <rpintor@lucasjamestalent.com>
+Subject: Senior Product Manager — supply chain SaaS
+
+Hi Wayne,
+
+I’m reaching out about a Senior Product Manager role with a fast-growing SaaS company bringing transparency to complex supply chains.
+Base salary: $150K–$170K + bonus + LTI. Flexible hybrid/remote. Here’s my Calendly: https://calendly.com/rpintor/scheduling
+My profile: https://www.linkedin.com/in/raina-pintor/
+
+Best,
+Raina
+Lucas James Talent Partners
+rpintor@lucasjamestalent.com
+Downers Grove, IL
+`;
+    });
+
+    el('sample2').addEventListener('click', ()=>{
+      emailText.value =
+`Hi Wayne Young,
+
+IMMEDIATE HIRING — ALL INCLUSIVE W2 RATE
+Smart Grid Solutions Architect - Tampa, FL (onsite) - 24-month contract to hire - $90/hr W2 ALL INCLUSIVE
+EMS, ADMS, SCADA, NERC CIP, OMS, GIS, AMI, LTE, IoT, Oracle, SQL Server, PL/SQL, HANA, Linux, Windows, BizTalk, FME, cloud hybrid, microservices, middleware, RESTful APIs, and more more more
+
+Please reply to bheem.reddy@panzersolutions.com or naveen.reddy@panzersolutions.com
+Phone: 223-332-4427
+
+Thanks,
+Naveen Reddy
+Panzer Solutions LLC
+`;
+    });
+
+    // If the user pastes, auto-run after a short delay (nice touch)
+    let pasteTimer;
+    emailText.addEventListener('paste', ()=>{
+      clearTimeout(pasteTimer);
+      pasteTimer = setTimeout(()=>{
+        if(emailText.value.trim().length>40){
+          const rep = scoreEmail(emailText.value.trim());
+          renderReport(rep);
+        }
+      }, 400);
+    });
+  </script>
+</body>
+</html>
